@@ -15,6 +15,10 @@ import (
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/sagernet/sing/common"
+	"github.com/sagernet/sing/common/control"
+	E "github.com/sagernet/sing/common/exceptions"
+	M "github.com/sagernet/sing/common/metadata"
 	"github.com/sagernet/wireguard-go/conn/winrio"
 	"golang.org/x/sys/windows"
 )
@@ -71,18 +75,26 @@ type afWinRingBind struct {
 
 // WinRingBind uses Windows registered I/O for fast ring buffered networking.
 type WinRingBind struct {
+	externalControl     control.Func
+	reservedForEndpoint map[WinRingEndpoint][3]uint8
+
 	v4, v6 afWinRingBind
 	mu     sync.RWMutex
 	isOpen atomic.Uint32 // 0, 1, or 2
 }
 
-func NewDefaultBind() Bind { return NewWinRingBind() }
+func NewDefaultBind(externalControl control.Func) Bind {
+	return NewWinRingBind(externalControl)
+}
 
-func NewWinRingBind() Bind {
+func NewWinRingBind(externalControl control.Func) Bind {
 	if !winrio.Initialize() {
-		return NewStdNetBind()
+		return NewStdNetBind(externalControl)
 	}
-	return new(WinRingBind)
+	return &WinRingBind{
+		externalControl:     externalControl,
+		reservedForEndpoint: make(map[WinRingEndpoint][3]uint8),
+	}
 }
 
 type WinRingEndpoint struct {
@@ -238,7 +250,7 @@ func (ring *ringBuffer) Open() error {
 	return nil
 }
 
-func (bind *afWinRingBind) Open(family int32, sa windows.Sockaddr) (windows.Sockaddr, error) {
+func (bind *afWinRingBind) Open(family int32, sa windows.Sockaddr, externalControl control.Func) (windows.Sockaddr, error) {
 	var err error
 	bind.sock, err = winrio.Socket(family, windows.SOCK_DGRAM, windows.IPPROTO_UDP)
 	if err != nil {
@@ -256,6 +268,19 @@ func (bind *afWinRingBind) Open(family int32, sa windows.Sockaddr) (windows.Sock
 	if err != nil {
 		return nil, err
 	}
+	var network string
+	switch family {
+	case windows.AF_INET:
+		network = "udp4"
+	case windows.AF_INET6:
+		network = "udp6"
+	}
+	if externalControl != nil {
+		err = externalControl(network, M.AddrPortFromSockaddr(sa).String(), &fakeRawConn{bind.sock})
+		if err != nil {
+			return nil, err
+		}
+	}
 	err = windows.Bind(bind.sock, sa)
 	if err != nil {
 		return nil, err
@@ -265,6 +290,23 @@ func (bind *afWinRingBind) Open(family int32, sa windows.Sockaddr) (windows.Sock
 		return nil, err
 	}
 	return sa, nil
+}
+
+type fakeRawConn struct {
+	socket windows.Handle
+}
+
+func (c *fakeRawConn) Control(f func(fd uintptr)) error {
+	f(uintptr(c.socket))
+	return nil
+}
+
+func (c *fakeRawConn) Read(f func(fd uintptr) (done bool)) error {
+	panic("not implemented")
+}
+
+func (c *fakeRawConn) Write(f func(fd uintptr) (done bool)) error {
+	panic("not implemented")
 }
 
 func (bind *WinRingBind) Open(port uint16) (recvFns []ReceiveFunc, selectedPort uint16, err error) {
@@ -279,11 +321,11 @@ func (bind *WinRingBind) Open(port uint16) (recvFns []ReceiveFunc, selectedPort 
 		return nil, 0, ErrBindAlreadyOpen
 	}
 	var sa windows.Sockaddr
-	sa, err = bind.v4.Open(windows.AF_INET, &windows.SockaddrInet4{Port: int(port)})
+	sa, err = bind.v4.Open(windows.AF_INET, &windows.SockaddrInet4{Port: int(port)}, bind.externalControl)
 	if err != nil {
 		return nil, 0, err
 	}
-	sa, err = bind.v6.Open(windows.AF_INET6, &windows.SockaddrInet6{Port: sa.(*windows.SockaddrInet4).Port})
+	sa, err = bind.v6.Open(windows.AF_INET6, &windows.SockaddrInet6{Port: sa.(*windows.SockaddrInet4).Port}, bind.externalControl)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -419,6 +461,9 @@ func (bind *WinRingBind) receiveIPv4(bufs [][]byte, sizes []int, eps []Endpoint)
 	bind.mu.RLock()
 	defer bind.mu.RUnlock()
 	n, ep, err := bind.v4.Receive(bufs[0], &bind.isOpen)
+	if n > 3 {
+		common.ClearArray(bufs[0][1:4])
+	}
 	sizes[0] = n
 	eps[0] = ep
 	return 1, err
@@ -428,6 +473,9 @@ func (bind *WinRingBind) receiveIPv6(bufs [][]byte, sizes []int, eps []Endpoint)
 	bind.mu.RLock()
 	defer bind.mu.RUnlock()
 	n, ep, err := bind.v6.Receive(bufs[0], &bind.isOpen)
+	if n > 3 {
+		common.ClearArray(bufs[0][1:4])
+	}
 	sizes[0] = n
 	eps[0] = ep
 	return 1, err
@@ -494,6 +542,12 @@ func (bind *WinRingBind) Send(bufs [][]byte, endpoint Endpoint, offset int) erro
 	defer bind.mu.RUnlock()
 	for _, buf := range bufs {
 		buf = buf[offset:]
+		if len(buf) > 3 {
+			reserved, loaded := bind.reservedForEndpoint[*endpoint.(*WinRingEndpoint)]
+			if loaded {
+				copy(buf[1:4], reserved[:])
+			}
+		}
 		switch nend.family {
 		case windows.AF_INET:
 			if bind.v4.blackhole {
@@ -512,6 +566,14 @@ func (bind *WinRingBind) Send(bufs [][]byte, endpoint Endpoint, offset int) erro
 		}
 	}
 	return nil
+}
+
+func (bind *WinRingBind) SetReservedForEndpoint(destination netip.AddrPort, reserved [3]byte) {
+	endpoint, err := bind.ParseEndpoint(destination.String())
+	if err != nil {
+		panic(E.Cause(err, "parse destination as WinRingEndpoint"))
+	}
+	bind.reservedForEndpoint[*endpoint.(*WinRingEndpoint)] = reserved
 }
 
 func (s *StdNetBind) BindSocketToInterface4(interfaceIndex uint32, blackhole bool) error {

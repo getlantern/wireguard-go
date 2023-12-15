@@ -16,6 +16,9 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/sagernet/sing/common"
+	"github.com/sagernet/sing/common/control"
+	M "github.com/sagernet/sing/common/metadata"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 )
@@ -28,6 +31,9 @@ var _ Bind = (*StdNetBind)(nil)
 // methods for sending and receiving multiple datagrams per-syscall. See the
 // proposal in https://github.com/golang/go/issues/45886#issuecomment-1218301564.
 type StdNetBind struct {
+	externalControl     control.Func
+	reservedForEndpoint map[netip.AddrPort][3]uint8
+
 	mu            sync.Mutex // protects all fields except as specified
 	ipv4          *net.UDPConn
 	ipv6          *net.UDPConn
@@ -46,8 +52,11 @@ type StdNetBind struct {
 	blackhole6 bool
 }
 
-func NewStdNetBind() Bind {
+func NewStdNetBind(externalControl control.Func) Bind {
 	return &StdNetBind{
+		externalControl:     externalControl,
+		reservedForEndpoint: make(map[netip.AddrPort][3]uint8),
+
 		udpAddrPool: sync.Pool{
 			New: func() any {
 				return &net.UDPAddr{
@@ -117,8 +126,29 @@ func (e *StdNetEndpoint) DstToString() string {
 	return e.AddrPort.String()
 }
 
-func listenNet(network string, port int) (*net.UDPConn, int, error) {
-	conn, err := listenConfig().ListenPacket(context.Background(), network, ":"+strconv.Itoa(port))
+func listenNet(externalControl control.Func, network string, port int) (*net.UDPConn, int, error) {
+	var listenerAddr string
+	if network == "udp6" {
+		listenerAddr = "[::]:" + strconv.Itoa(port)
+	} else {
+		listenerAddr = ":" + strconv.Itoa(port)
+	}
+
+	var listener net.ListenConfig
+	listener.Control = func(network, address string, conn syscall.RawConn) error {
+		for _, wgControlFn := range controlFns {
+			err := wgControlFn(network, address, conn)
+			if err != nil {
+				return err
+			}
+		}
+		if externalControl != nil {
+			return externalControl(network, address, conn)
+		} else {
+			return nil
+		}
+	}
+	conn, err := listener.ListenPacket(context.Background(), network, listenerAddr)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -154,13 +184,13 @@ again:
 	var v4pc *ipv4.PacketConn
 	var v6pc *ipv6.PacketConn
 
-	v4conn, port, err = listenNet("udp4", port)
+	v4conn, port, err = listenNet(s.externalControl, "udp4", port)
 	if err != nil && !errors.Is(err, syscall.EAFNOSUPPORT) {
 		return nil, 0, err
 	}
 
 	// Listen on the same port as we're using for ipv4.
-	v6conn, port, err = listenNet("udp6", port)
+	v6conn, port, err = listenNet(s.externalControl, "udp6", port)
 	if uport == 0 && errors.Is(err, syscall.EADDRINUSE) && tries < 100 {
 		v4conn.Close()
 		tries++
@@ -265,8 +295,10 @@ func (s *StdNetBind) receiveIP(
 		if sizes[i] == 0 {
 			continue
 		}
-		addrPort := msg.Addr.(*net.UDPAddr).AddrPort()
-		ep := &StdNetEndpoint{AddrPort: addrPort} // TODO: remove allocation
+		if msg.N > 3 {
+			common.ClearArray(bufs[i][1:4])
+		}
+		ep := &StdNetEndpoint{AddrPort: M.AddrPortFromNet(msg.Addr)} // TODO: remove allocation
 		getSrcFromControl(msg.OOB[:msg.NN], ep)
 		eps[i] = ep
 	}
@@ -375,6 +407,14 @@ func (s *StdNetBind) Send(bufs [][]byte, endpoint Endpoint, offset int) error {
 		retried bool
 		err     error
 	)
+	for _, buf := range bufs {
+		if len(buf) > 3 {
+			reserved, loaded := s.reservedForEndpoint[endpoint.(*StdNetEndpoint).AddrPort]
+			if loaded {
+				copy(buf[1:4], reserved[:])
+			}
+		}
+	}
 retry:
 	if offload {
 		n := coalesceMessages(ua, endpoint.(*StdNetEndpoint), bufs, offset, *msgs, setGSOSize)
@@ -403,6 +443,10 @@ retry:
 		return ErrUDPGSODisabled{onLaddr: conn.LocalAddr().String(), RetryErr: err}
 	}
 	return err
+}
+
+func (s *StdNetBind) SetReservedForEndpoint(destination netip.AddrPort, reserved [3]byte) {
+	s.reservedForEndpoint[destination] = reserved
 }
 
 func (s *StdNetBind) send(conn *net.UDPConn, pc batchWriter, msgs []ipv6.Message) error {
