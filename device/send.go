@@ -328,7 +328,7 @@ func (device *Device) InputPacket(destination []byte, packetSlices [][]byte) {
 		return
 	}
 	elem := device.NewOutboundElement()
-	packet := elem.buffer[MessageTransportHeaderSize:]
+	packet := elem.buffer[MessageEncapsulatingTransportSize+MessageTransportHeaderSize:]
 	var n int
 	for _, packetSlice := range packetSlices {
 		n += copy(packet[n:], packetSlice)
