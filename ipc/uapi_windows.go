@@ -8,8 +8,8 @@ package ipc
 import (
 	"net"
 
-	"golang.org/x/sys/windows"
 	"github.com/sagernet/wireguard-go/ipc/namedpipe"
+	"golang.org/x/sys/windows"
 )
 
 // TODO: replace these with actual standard windows error numbers from the win package

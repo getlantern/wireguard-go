@@ -121,6 +121,35 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 				sendf("rx_bytes=%d", peer.rxBytes.Load())
 				sendf("persistent_keepalive_interval=%d", peer.persistentKeepaliveInterval.Load())
 
+				// Amnezia obfuscation parameters
+				if jc := peer.junkPacketCount.Load(); jc != 0 {
+					sendf("jc=%d", jc)
+				}
+				if jmin := peer.junkPacketMinSize.Load(); jmin != 0 {
+					sendf("jmin=%d", jmin)
+				}
+				if jmax := peer.junkPacketMaxSize.Load(); jmax != 0 {
+					sendf("jmax=%d", jmax)
+				}
+				if s1 := peer.initPacketMagicHeader.Load(); s1 != 0 {
+					sendf("s1=%d", s1)
+				}
+				if s2 := peer.responsePacketMagicHeader.Load(); s2 != 0 {
+					sendf("s2=%d", s2)
+				}
+				if h1 := peer.underloadPacketMagicHeader.Load(); h1 != 0 {
+					sendf("h1=%d", h1)
+				}
+				if h2 := peer.transportPacketMagicHeader.Load(); h2 != 0 {
+					sendf("h2=%d", h2)
+				}
+				if h3 := peer.h3.Load(); h3 != 0 {
+					sendf("h3=%d", h3)
+				}
+				if h4 := peer.h4.Load(); h4 != 0 {
+					sendf("h4=%d", h4)
+				}
+
 				device.allowedips.EntriesForPeer(peer, func(prefix netip.Prefix) bool {
 					sendf("allowed_ip=%s", prefix.String())
 					return true
@@ -382,6 +411,95 @@ func (device *Device) handlePeerLine(peer *ipcSetPeer, key, value string) error 
 			return nil
 		}
 		device.allowedips.Insert(prefix, peer.Peer)
+
+	case "jc":
+		device.log.Verbosef("%v - UAPI: Updating junk packet count", peer.Peer)
+		jc, err := strconv.ParseUint(value, 10, 32)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to set junk packet count: %w", err)
+		}
+		if jc > 1000 {
+			return ipcErrorf(ipc.IpcErrorInvalid, "junk packet count too large: %d (max 1000)", jc)
+		}
+		peer.junkPacketCount.Store(uint32(jc))
+
+	case "jmin":
+		device.log.Verbosef("%v - UAPI: Updating junk packet minimum size", peer.Peer)
+		jmin, err := strconv.ParseUint(value, 10, 32)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to set junk packet minimum size: %w", err)
+		}
+		if jmin > 65535 {
+			return ipcErrorf(ipc.IpcErrorInvalid, "junk packet minimum size too large: %d (max 65535)", jmin)
+		}
+		// Check that jmin <= jmax if both are set
+		if jmax := peer.junkPacketMaxSize.Load(); jmax > 0 && uint32(jmin) > jmax {
+			return ipcErrorf(ipc.IpcErrorInvalid, "junk packet minimum size (%d) must be <= maximum size (%d)", jmin, jmax)
+		}
+		peer.junkPacketMinSize.Store(uint32(jmin))
+
+	case "jmax":
+		device.log.Verbosef("%v - UAPI: Updating junk packet maximum size", peer.Peer)
+		jmax, err := strconv.ParseUint(value, 10, 32)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to set junk packet maximum size: %w", err)
+		}
+		if jmax > 65535 {
+			return ipcErrorf(ipc.IpcErrorInvalid, "junk packet maximum size too large: %d (max 65535)", jmax)
+		}
+		// Check that jmax >= jmin if both are set
+		if jmin := peer.junkPacketMinSize.Load(); jmin > 0 && uint32(jmax) < jmin {
+			return ipcErrorf(ipc.IpcErrorInvalid, "junk packet maximum size (%d) must be >= minimum size (%d)", jmax, jmin)
+		}
+		peer.junkPacketMaxSize.Store(uint32(jmax))
+
+	case "s1":
+		device.log.Verbosef("%v - UAPI: Updating init packet magic header", peer.Peer)
+		s1, err := strconv.ParseUint(value, 10, 32)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to set init packet magic header: %w", err)
+		}
+		peer.initPacketMagicHeader.Store(uint32(s1))
+
+	case "s2":
+		device.log.Verbosef("%v - UAPI: Updating response packet magic header", peer.Peer)
+		s2, err := strconv.ParseUint(value, 10, 32)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to set response packet magic header: %w", err)
+		}
+		peer.responsePacketMagicHeader.Store(uint32(s2))
+
+	case "h1":
+		device.log.Verbosef("%v - UAPI: Updating underload packet magic header", peer.Peer)
+		h1, err := strconv.ParseUint(value, 10, 32)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to set underload packet magic header: %w", err)
+		}
+		peer.underloadPacketMagicHeader.Store(uint32(h1))
+
+	case "h2":
+		device.log.Verbosef("%v - UAPI: Updating transport packet magic header", peer.Peer)
+		h2, err := strconv.ParseUint(value, 10, 32)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to set transport packet magic header: %w", err)
+		}
+		peer.transportPacketMagicHeader.Store(uint32(h2))
+
+	case "h3":
+		device.log.Verbosef("%v - UAPI: Updating h3 obfuscation parameter", peer.Peer)
+		h3, err := strconv.ParseUint(value, 10, 32)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to set h3 obfuscation parameter: %w", err)
+		}
+		peer.h3.Store(uint32(h3))
+
+	case "h4":
+		device.log.Verbosef("%v - UAPI: Updating h4 obfuscation parameter", peer.Peer)
+		h4, err := strconv.ParseUint(value, 10, 32)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to set h4 obfuscation parameter: %w", err)
+		}
+		peer.h4.Store(uint32(h4))
 
 	case "protocol_version":
 		if value != "1" {

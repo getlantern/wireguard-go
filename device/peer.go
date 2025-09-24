@@ -53,6 +53,17 @@ type Peer struct {
 	cookieGenerator             CookieGenerator
 	trieEntries                 list.List
 	persistentKeepaliveInterval atomic.Uint32
+
+	// Amnezia obfuscation parameters
+	junkPacketCount            atomic.Uint32 // jc: number of junk packets to send
+	junkPacketMinSize          atomic.Uint32 // jmin: minimum junk packet size
+	junkPacketMaxSize          atomic.Uint32 // jmax: maximum junk packet size
+	initPacketMagicHeader      atomic.Uint32 // s1: init packet magic header
+	responsePacketMagicHeader  atomic.Uint32 // s2: response packet magic header
+	underloadPacketMagicHeader atomic.Uint32 // h1: underload packet magic header
+	transportPacketMagicHeader atomic.Uint32 // h2: transport packet magic header
+	h3                         atomic.Uint32 // h3: additional header obfuscation parameter
+	h4                         atomic.Uint32 // h4: additional header obfuscation parameter
 }
 
 func (device *Device) NewPeer(pk NoisePublicKey) (*Peer, error) {
