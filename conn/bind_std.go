@@ -408,10 +408,10 @@ func (s *StdNetBind) Send(bufs [][]byte, endpoint Endpoint, offset int) error {
 		err     error
 	)
 	for _, buf := range bufs {
-		if len(buf) > 3 {
+		if len(buf) > offset+3 {
 			reserved, loaded := s.reservedForEndpoint[endpoint.(*StdNetEndpoint).AddrPort]
 			if loaded {
-				copy(buf[1:4], reserved[:])
+				copy(buf[offset+1:offset+4], reserved[:])
 			}
 		}
 	}
