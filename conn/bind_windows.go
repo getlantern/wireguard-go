@@ -15,9 +15,8 @@ import (
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/sagernet/wireguard-go/conn/winrio"
 	"golang.org/x/sys/windows"
-
-	"golang.zx2c4.com/wireguard/conn/winrio"
 )
 
 const (

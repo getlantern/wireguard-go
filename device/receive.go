@@ -12,10 +12,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sagernet/wireguard-go/conn"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
-	"golang.zx2c4.com/wireguard/conn"
 )
 
 type QueueHandshakeElement struct {
@@ -411,7 +411,6 @@ func (device *Device) RoutineHandshake(id int) {
 			// derive keypair
 
 			err = peer.BeginSymmetricSession()
-
 			if err != nil {
 				device.log.Errorf("%v - Failed to derive keypair: %v", peer, err)
 				goto skip

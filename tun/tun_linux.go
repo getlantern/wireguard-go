@@ -17,9 +17,9 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/sagernet/wireguard-go/conn"
+	"github.com/sagernet/wireguard-go/rwcancel"
 	"golang.org/x/sys/unix"
-	"golang.zx2c4.com/wireguard/conn"
-	"golang.zx2c4.com/wireguard/rwcancel"
 )
 
 const (
@@ -514,9 +514,7 @@ func (tun *NativeTun) initFromFlags(name string) error {
 		return err
 	}
 	if e := sc.Control(func(fd uintptr) {
-		var (
-			ifr *unix.Ifreq
-		)
+		var ifr *unix.Ifreq
 		ifr, err = unix.NewIfreq(name)
 		if err != nil {
 			return

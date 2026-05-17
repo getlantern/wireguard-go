@@ -9,8 +9,8 @@ import (
 	"net"
 	"os"
 
+	"github.com/sagernet/wireguard-go/rwcancel"
 	"golang.org/x/sys/unix"
-	"golang.zx2c4.com/wireguard/rwcancel"
 )
 
 type UAPIListener struct {
@@ -84,7 +84,6 @@ func UAPIListen(name string, file *os.File) (net.Listener, error) {
 			unix.IN_DELETE|
 			unix.IN_DELETE_SELF,
 	)
-
 	if err != nil {
 		return nil, err
 	}
