@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sagernet/wireguard-go/conn"
 	"github.com/sagernet/wireguard-go/tai64n"
 	"golang.org/x/crypto/blake2s"
 	"golang.org/x/crypto/chacha20poly1305"
@@ -337,7 +338,7 @@ func (device *Device) CreateMessageInitiation(peer *Peer) (*MessageInitiation, e
 	return &msg, nil
 }
 
-func (device *Device) ConsumeMessageInitiation(msg *MessageInitiation) *Peer {
+func (device *Device) ConsumeMessageInitiation(msg *MessageInitiation, endpoint conn.Endpoint) *Peer {
 	var (
 		hash     [blake2s.Size]byte
 		chainKey [blake2s.Size]byte
@@ -370,6 +371,11 @@ func (device *Device) ConsumeMessageInitiation(msg *MessageInitiation) *Peer {
 	mixHash(&hash, &hash, msg.Static[:])
 
 	// lookup peer
+
+	initEP, ok := endpoint.(conn.InitiationAwareEndpoint)
+	if ok {
+		initEP.InitiationMessagePublicKey(peerPK)
+	}
 
 	peer := device.LookupPeer(peerPK)
 	if peer == nil || !peer.isRunning.Load() {

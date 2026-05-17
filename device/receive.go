@@ -359,7 +359,7 @@ func (device *Device) RoutineHandshake(id int) {
 
 			// consume initiation
 
-			peer := device.ConsumeMessageInitiation(&msg)
+			peer := device.ConsumeMessageInitiation(&msg, elem.endpoint)
 			if peer == nil {
 				device.log.Verbosef("Received invalid initiation message from %s", elem.endpoint.DstToString())
 				goto skip
@@ -458,6 +458,9 @@ func (peer *Peer) RoutineSequentialReceiver(maxBatchSize int) {
 				peer.SetEndpointFromPacket(elem.endpoint)
 				peer.timersHandshakeComplete()
 				peer.SendStagedPackets()
+			}
+			if ep, ok := elem.endpoint.(conn.PeerAwareEndpoint); ok {
+				ep.FromPeer(peer.handshake.remoteStatic)
 			}
 			rxBytesLen += uint64(len(elem.packet) + MinMessageSize)
 

@@ -86,6 +86,40 @@ type Endpoint interface {
 	SrcIP() netip.Addr
 }
 
+// InitiationAwareEndpoint is an optional [Endpoint] specialization for
+// integrations that want to know when a WireGuard handshake initiation
+// message has been received, enabling just-in-time peer configuration before
+// attempted decryption.
+//
+// It's most useful when used in combination with [PeerAwareEndpoint], enabling
+// JIT peer configuration and post-decryption peer verification from a single
+// implementer.
+type InitiationAwareEndpoint interface {
+	// InitiationMessagePublicKey is called when a handshake initiation message
+	// has been received, and the sender's public key has been identified, but
+	// BEFORE an attempt has been made to verify it.
+	InitiationMessagePublicKey(peerPublicKey [32]byte)
+}
+
+// PeerAwareEndpoint is an optional Endpoint specialization for
+// integrations that want to know about the outcome of Cryptokey Routing
+// identification.
+//
+// If they receive a packet from a source they had not pre-identified,
+// to learn the identification WireGuard can derive from the session
+// or handshake.
+//
+// A [PeerAwareEndpoint] may be installed as the [conn.Endpoint] following
+// successful decryption unless endpoint roaming has been disabled for
+// the peer.
+type PeerAwareEndpoint interface {
+	// FromPeer is called at least once per successfully Cryptokey Routing ID'd
+	// [ReceiveFunc] packets batch for a given node key. wireguard-go will
+	// always call it for the latest/tail packet in the batch, only ever
+	// suppressing calls for older packets.
+	FromPeer(peerPublicKey [32]byte)
+}
+
 var (
 	ErrBindAlreadyOpen   = errors.New("bind is already open")
 	ErrWrongEndpointType = errors.New("endpoint type does not correspond with bind type")
